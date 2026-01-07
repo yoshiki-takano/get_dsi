@@ -43,8 +43,19 @@ DEFAULT_API_URL = "https://api.clarivate.com/patents/search/"
 ALT_API_URL = "https://api.clarivate.com/search/patents/document/json/"  # 代替
 api_url = st.sidebar.selectbox("API Endpoint", [DEFAULT_API_URL, ALT_API_URL], index=0)
 
-api_key_env = os.environ.get("IP_DATA_API", "")
-api_key = st.sidebar.text_input("X-ApiKey", value=api_key_env, type="password")
+# api_key_env = os.environ.get("IP_DATA_API", "")
+
+def get_api_key() -> str:
+    # Cloud/ローカルいずれでも st.secrets が最優先
+    try:
+        return st.secrets["IP_DATA_API"]
+    except Exception:
+        # ローカルで環境変数を使う場合のフォールバック
+        return os.environ.get("IP_DATA_API", "")
+
+api_key = get_api_key()
+
+api_key = st.sidebar.text_input("X-ApiKey", value=api_key, type="password")
 
 timeout_connect = st.sidebar.number_input("接続タイムアウト(秒)", min_value=1, value=10)
 timeout_read    = st.sidebar.number_input("読み取りタイムアウト(秒)", min_value=10, value=90)
