@@ -41,7 +41,7 @@ st.sidebar.title("設定")
 # API設定
 DEFAULT_API_URL = "https://api.clarivate.com/patents/search/"
 ALT_API_URL = "https://api.clarivate.com/search/patents/document/json/"  # 代替
-api_url = st.sidebar.selectbox("API Endpoint", [DEFAULT_API_URL, ALT_API_URL], index=0)
+api_url = st.sidebar.selectbox("API Endpoint", [DEFAULT_API_URL], index=0) #現状一つのみ, ALT_API_URL
 
 # api_key_env = os.environ.get("IP_DATA_API", "")
 
