@@ -58,8 +58,10 @@ api_key = get_api_key()
 
 api_key = st.sidebar.text_input("X-ApiKey", value=api_key, type="password")
 
-timeout_connect = st.sidebar.number_input("接続タイムアウト(秒)", min_value=1, value=10)
-timeout_read    = st.sidebar.number_input("読み取りタイムアウト(秒)", min_value=10, value=90)
+# タイムアウト設定
+with st.sidebar.expander("タイムアウト", expanded=False):
+    timeout_connect = st.number_input("接続タイムアウト(秒)", min_value=1, value=10, step=1, key="TIMEOUT_CONNECT")
+    timeout_read    = st.number_input("読み取りタイムアウト(秒)", min_value=10, value=90, step=1, key="TIMEOUT_READ")
 
 HEADERS = {"Accept": "application/json", "Content-Type": "application/json", "X-ApiKey": api_key}
 
@@ -74,12 +76,25 @@ DEFAULT_FIELDS = [
 with st.sidebar.expander("取得フィールドの選択", expanded=False):
     selected_fields = st.multiselect("Fields", DEFAULT_FIELDS, default=DEFAULT_FIELDS)
 
-# パラメータ
-st.sidebar.subheader("パラメータ")
-ID_CHUNK     = st.sidebar.number_input("ID_CHUNK（IDを分割処理する単位）", min_value=1, value=2000)
-FIELD_CHUNK  = st.sidebar.number_input("FIELD_CHUNK（1回に要求するフィールド数）", min_value=1, value=14)
-MAX_RETRIES  = st.sidebar.number_input("最大リトライ回数", min_value=1, value=3)
-backoff_base = st.sidebar.number_input("バックオフ基数", min_value=0.5, value=1.0, step=0.5)
+# パラメータ（Expanderで初期は閉じる）
+with st.sidebar.expander("パラメータ", expanded=False):
+    ID_CHUNK     = st.number_input(
+        "ID_CHUNK（IDを分割処理する単位）",
+        min_value=1, value=2000, step=1, key="ID_CHUNK"
+    )
+    FIELD_CHUNK  = st.number_input(
+        "FIELD_CHUNK（1回に要求するフィールド数）",
+        min_value=1, value=14, step=1, key="FIELD_CHUNK"
+    )
+    MAX_RETRIES  = st.number_input(
+        "最大リトライ回数",
+        min_value=1, value=3, step=1, key="MAX_RETRIES"
+    )
+    backoff_base = st.number_input(
+        "バックオフ基数",
+        min_value=0.5, value=1.0, step=0.5, key="BACKOFF_BASE"
+    )
+
 
 # 詳細ログ（サイドバー）
 log_box_sidebar = st.sidebar.empty()
