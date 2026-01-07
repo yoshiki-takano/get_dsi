@@ -1,22 +1,46 @@
 
-# post_patent_search_app_main_progress.py
-import os, json, time, random, csv
+# dsi_fetcher_app.py
+# ------------------------------------------------------------
+# Clarivate Patents Search API（Publication number前提）
+# ・メイン：ファイルアップロード／テキスト入力／実行ボタン／進捗／結果表示／CSVダウンロード
+# ・サイドバー：API設定／取得フィールド／パラメータ／詳細ログ
+# ・CSVダウンロード後も表が残るよう、結果を st.session_state に保持
+# ------------------------------------------------------------
+import os
+import json
+import time
+import random
+import csv
 from collections import defaultdict
 from datetime import datetime
 from io import StringIO
+
 import requests
 import streamlit as st
 import pandas as pd
 
 # ---------------- Page Config ----------------
-st.set_page_config(page_title="DSI Fetcher", layout="wide")
+st.set_page_config(page_title="Derwent Strength Index Fetcher（Publication Number）", layout="wide")
+
+# ---------------- Session State Init ----------------
+# ダウンロード後の再実行でも結果を維持するために初期化
+if "df" not in st.session_state:
+    st.session_state.df = None
+if "rows" not in st.session_state:
+    st.session_state.rows = None
+if "csv_str" not in st.session_state:
+    st.session_state.csv_str = None
+if "ts" not in st.session_state:
+    st.session_state.ts = None
+if "log_lines" not in st.session_state:
+    st.session_state.log_lines = []
 
 # ---------------- Sidebar: 設定 ----------------
 st.sidebar.title("設定")
 
 # API設定
 DEFAULT_API_URL = "https://api.clarivate.com/patents/search/"
-ALT_API_URL = "https://api.clarivate.com/search/patents/document/json/"  # 必要に応じて切替
+ALT_API_URL = "https://api.clarivate.com/search/patents/document/json/"  # 代替
 api_url = st.sidebar.selectbox("API Endpoint", [DEFAULT_API_URL, ALT_API_URL], index=0)
 
 api_key_env = os.environ.get("IP_DATA_API", "")
@@ -27,12 +51,12 @@ timeout_read    = st.sidebar.number_input("読み取りタイムアウト(秒)",
 
 HEADERS = {"Accept": "application/json", "Content-Type": "application/json", "X-ApiKey": api_key}
 
-# 取得フィールド
+# 取得フィールド（必要に応じて追加）
 DEFAULT_FIELDS = [
     "GUID", "DWPI_ACCESSION_NUMBER", "PUBLICATION_NUMBER",
     "DSI_STRENGTH_INDEX",
-    "DSI_INVENTION_GLOBALIZATION_SCORE", "DSI_INVENTION_SUCCESS_SCORE", 
-    "DSI_INVENTION_INFLUENCE_SCORE", "DSI_TECHNICAL_DISTINCTIVENESS_SCORE",
+    "DSI_INVENTION_GLOBALIZATION_SCORE", "DSI_INVENTION_INFLUENCE_SCORE",
+    "DSI_INVENTION_SUCCESS_SCORE", "DSI_TECHNICAL_DISTINCTIVENESS_SCORE",
     "DSI_AVERAGE_SCORE", "DSI_YEARS_REMAINING", "DSI_AGE_DISCOUNT",
 ]
 with st.sidebar.expander("取得フィールドの選択", expanded=True):
@@ -43,14 +67,14 @@ st.sidebar.subheader("パラメータ")
 ID_CHUNK     = st.sidebar.number_input("ID_CHUNK（IDを分割処理する単位）", min_value=1, value=2000)
 FIELD_CHUNK  = st.sidebar.number_input("FIELD_CHUNK（1回に要求するフィールド数）", min_value=1, value=14)
 MAX_RETRIES  = st.sidebar.number_input("最大リトライ回数", min_value=1, value=3)
-backoff_base = st.sidebar.number_input("バックオフ基数", min_value=1, value=1)
+backoff_base = st.sidebar.number_input("バックオフ基数", min_value=0.5, value=1.0, step=0.5)
 
-# 進捗・詳細ログ（サイドバー）
-log_box_sidebar  = st.sidebar.empty()
+# 詳細ログ（サイドバー）
+log_box_sidebar = st.sidebar.empty()
 st.sidebar.info("Publication number 前提。リトライ時は FIELD_CHUNK を段階的に縮小（例：14→7→4）。")
 
 # ---------------- Main: タイトル・入力・実行・進捗・結果 ----------------
-st.title("Derwent Strength Index Fetcher (公報番号のみ対応)")
+st.title("Derwent Strength Index Fetcher（公報番号検索のみ対応）")
 st.caption("Clarivate Patents Search API を用いて、Publication numberリストから指定フィールドを取得します。")
 
 # 入力（メイン）：ファイルアップロード＋テキスト
@@ -60,12 +84,25 @@ st.text("または下のテキストボックスに貼り付け（アップロ�
 pubs_text = st.text_area("Publication number（1行＝1件）", height=160,
                          placeholder="例:\nWO2021243294A1\nJP07737400B2\nUS20210374460A1")
 
-# 実行ボタン（メイン）
-run = st.button("実行")
+# 実行／結果クリア ボタン（メイン）
+col_run = st.columns(2)
+with col_run[0]:
+    run = st.button("実行")
+with col_run[1]:
+    clear = st.button("結果をクリア")
 
-# メインの進捗表示（新設）
-progress_main = st.empty()     # st.progress を差し込むプレースホルダ
-status_main   = st.empty()     # テキストで現在のステータス文を出す
+# メインの進捗表示
+progress_main = st.empty()     # st.progress のプレースホルダ
+status_main   = st.empty()     # ステータス文表示
+
+# クリア操作
+if clear:
+    st.session_state.df = None
+    st.session_state.rows = None
+    st.session_state.csv_str = None
+    st.session_state.ts = None
+    st.session_state.log_lines = []
+    status_main.write("結果をクリアしました。")
 
 # ---------------- Helpers ----------------
 def chunked(iterable, n):
@@ -96,9 +133,9 @@ def fetch_fields_for_numbers(pub_numbers, fields_list, chunk_size=14, field_name
         r.raise_for_status()
         js = r.json()
 
-        # "result" または配列を持つキーを探索（元ロジック準拠）
+        # "result" または配列を持つキーを探索
         rows = js.get("result") if isinstance(js, dict) and "result" in js else None
-        if rows is None:
+        if rows is None and isinstance(js, dict):
             for k, v in js.items():
                 if isinstance(v, list) and v and isinstance(v[0], dict):
                     rows = v
@@ -141,10 +178,10 @@ def write_rows_to_csv_string(rows, field_order=None):
                 row[k] = v
         writer.writerow(row)
 
-    bom = "\ufeff"  # UTF-8 BOM
+    bom = "\ufeff"  # UTF-8 BOM（Excel対策）
     return bom + sio.getvalue()
 
-# ---------------- Run ----------------
+# ---------------- Run (取得実行) ----------------
 if run:
     # 入力の組み立て：アップロードがあれば優先、なければテキストエリア
     if uploaded is not None:
@@ -160,10 +197,8 @@ if run:
         st.error("X-ApiKey が未設定です。")
         st.stop()
 
-    # 詳細ログ（サイドバー）
-    log_lines = []
-
-    # メインの進捗バーを初期化
+    # ログ初期化（サイドバー）
+    st.session_state.log_lines = []
     prog = progress_main.progress(0, text="開始")
     status_main.write("処理を開始しました…")
 
@@ -173,8 +208,8 @@ if run:
 
     for idx, id_chunk in enumerate(chunks, start=1):
         # ログ（サイドバー）
-        log_lines.append(f"Processing id chunk {idx} ({len(id_chunk)} items)...")
-        log_box_sidebar.text("\n".join(log_lines))
+        st.session_state.log_lines.append(f"Processing id chunk {idx} ({len(id_chunk)} items)...")
+        log_box_sidebar.text("\n".join(st.session_state.log_lines))
 
         # メインのステータス更新
         status_main.write(f"Chunk {idx}/{total_chunks} を処理中…（{len(id_chunk)}件）")
@@ -194,21 +229,21 @@ if run:
             else:
                 field_chunk_size = max(1, int(FIELD_CHUNK) // 4)
 
-            # サイドバーのログ
-            log_lines.append(
+            st.session_state.log_lines.append(
                 f"  Attempt {attempt}: field={field_name}, field_chunk={field_chunk_size}, ids={len(ids_to_fetch)}"
             )
-            log_box_sidebar.text("\n".join(log_lines))
+            log_box_sidebar.text("\n".join(st.session_state.log_lines))
 
             try:
                 rows_chunk = fetch_fields_for_numbers(
                     ids_to_fetch, selected_fields, chunk_size=field_chunk_size, field_name=field_name
                 )
             except Exception as e:
-                log_lines.append(f"  Error fetching (attempt {attempt}): {e}")
-                log_box_sidebar.text("\n".join(log_lines))
-                # 指数バックオフ＋ジッタ
-                sleep_s = float(backoff_base) * (2 ** attempt) * (1 + random.uniform(-0.15, 0.15))
+                st.session_state.log_lines.append(f"  Error fetching (attempt {attempt}): {e}")
+                log_box_sidebar.text("\n".join(st.session_state.log_lines))
+                # 指数バックオフ＋ジッタ（キャップ推奨：最大15秒）
+                jitter = random.uniform(-0.15, 0.15)
+                sleep_s = min(15, float(backoff_base) * (2 ** attempt) * (1 + jitter))
                 time.sleep(sleep_s)
                 continue
 
@@ -229,39 +264,51 @@ if run:
             # 差し引き
             ids_to_fetch = [i for i in ids_to_fetch if i not in returned_ids]
             if ids_to_fetch:
-                log_lines.append(f"  Missing after attempt {attempt}: {len(ids_to_fetch)} items; will retry.")
-                log_box_sidebar.text("\n".join(log_lines))
+                st.session_state.log_lines.append(
+                    f"  Missing after attempt {attempt}: {len(ids_to_fetch)} items; will retry."
+                )
+                log_box_sidebar.text("\n".join(st.session_state.log_lines))
                 time.sleep(0.8)
             else:
-                log_lines.append(f"  All items fetched for chunk {idx}.")
-                log_box_sidebar.text("\n".join(log_lines))
+                st.session_state.log_lines.append(f"  All items fetched for chunk {idx}.")
+                log_box_sidebar.text("\n".join(st.session_state.log_lines))
                 break
 
         if ids_to_fetch:
-            log_lines.append(
+            st.session_state.log_lines.append(
                 f"Warning: {len(ids_to_fetch)} items not retrieved after {MAX_RETRIES} attempts (chunk {idx})."
             )
-            log_box_sidebar.text("\n".join(log_lines))
+            log_box_sidebar.text("\n".join(st.session_state.log_lines))
 
-        # メイン進捗バー更新
         prog.progress(idx / total_chunks, text=f"Chunk {idx}/{total_chunks} 完了")
 
+    # 取得結果の保存（session_state）
     rows = list(defaultdict(dict, combined).values())
     if rows:
         df = pd.DataFrame(rows)
+        st.session_state.rows = rows
+        st.session_state.df = df
+        st.session_state.ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        st.session_state.csv_str = write_rows_to_csv_string(rows, field_order=selected_fields)
         status_main.write("全チャンクの処理が完了しました。")
-        st.success(f"取得完了：{len(rows)} レコード")
-        st.dataframe(df, use_container_width=True)
-
-        # CSVダウンロード（メイン）
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        csv_str = write_rows_to_csv_string(rows, field_order=selected_fields)
-        st.download_button(
-            label=f"CSVをダウンロード ({ts}_patents.csv)",
-            data=csv_str,
-            file_name=f"{ts}_patents.csv",
-            mime="text/csv",
-        )
     else:
+        st.session_state.rows = None
+        st.session_state.df = None
+        st.session_state.csv_str = None
+        st.session_state.ts = None
         status_main.write("レコードが返りませんでした。")
         st.warning("レコードが返りませんでした。")
+
+# ---------------- Persistent display (常時表示) ----------------
+# ダウンロードクリックで rerun されても、session_state に保存した結果で再描画
+if st.session_state.df is not None:
+    st.success(f"取得済み：{len(st.session_state.df)} レコード")
+    st.dataframe(st.session_state.df, use_container_width=True)
+    st.download_button(
+        label=f"CSVをダウンロード ({st.session_state.ts}_patents.csv)",
+        data=st.session_state.csv_str,
+        file_name=f"{st.session_state.ts}_patents.csv",
+        mime="text/csv",
+        key="download_csv",  # rerun時も安定させるためのキー
+    )
+
