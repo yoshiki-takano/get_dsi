@@ -73,7 +73,7 @@ DEFAULT_FIELDS = [
     "DSI_INVENTION_SUCCESS_SCORE", "DSI_TECHNICAL_DISTINCTIVENESS_SCORE",
     "DSI_AVERAGE_SCORE", "DSI_YEARS_REMAINING", "DSI_AGE_DISCOUNT",
 ]
-with st.sidebar.expander("取得フィールドの選択", expanded=False):
+with st.sidebar.expander("取得フィールド", expanded=False):
     selected_fields = st.multiselect("Fields", DEFAULT_FIELDS, default=DEFAULT_FIELDS)
 
 # パラメータ（Expanderで初期は閉じる）
