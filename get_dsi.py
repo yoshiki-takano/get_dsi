@@ -101,7 +101,7 @@ log_box_sidebar = st.sidebar.empty()
 # st.sidebar.info("Publication number 前提。リトライ時は FIELD_CHUNK を段階的に縮小（例：14→7→4）。")
 
 # ---------------- Main: タイトル・入力・実行・進捗・結果 ----------------
-st.title("Derwent Strength Index Fetcher（公報番号検索のみ対応）")
+st.title("Derwent Strength Index Fetcher\n（公報番号検索のみ対応）")
 st.caption("Clarivate Patents Search API を用いて、Publication numberリストから指定フィールドを取得します。")
 
 # 入力（メイン）：ファイルアップロード＋テキスト
