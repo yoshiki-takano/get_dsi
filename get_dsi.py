@@ -332,9 +332,9 @@ if st.session_state.df is not None:
     st.success(f"取得済み：{len(st.session_state.df)} レコード")
     st.dataframe(st.session_state.df, use_container_width=True)
     st.download_button(
-        label=f"CSVをダウンロード ({st.session_state.ts}_dsi_outputs.csv)",
+        label=f"CSVをダウンロード ({st.session_state.ts}_dsi_output.csv)",
         data=st.session_state.csv_str,
-        file_name=f"{st.session_state.ts}_dsi_outputs.csv",
+        file_name=f"{st.session_state.ts}_dsi_output.csv",
         mime="text/csv",
         key="download_csv",  # rerun時も安定させるためのキー
     )
