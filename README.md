@@ -122,18 +122,6 @@ Uses the Clarivate Patents Search API:
 
 The web UI is in Japanese (日本語).
 
-## License
-
-[Add your license information here]
-
-## Support
-
-For issues or questions about the Clarivate Patents Search API, contact Clarivate support.
-
-## Author
-
-Created for Clarivate Analytics patent research workflows.
-
 ---
 
 **Note**: Publication number search is currently the only supported search method. Other search methods may be added in future versions.
