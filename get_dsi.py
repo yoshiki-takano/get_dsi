@@ -89,7 +89,7 @@ with st.sidebar.expander("パラメータ", expanded=False):
     )
     MAX_RETRIES  = st.number_input(
         "最大リトライ回数",
-        min_value=1, value=3, step=1, key="MAX_RETRIES"
+        min_value=1, value=4, step=1, key="MAX_RETRIES"
     )
     backoff_base = st.number_input(
         "バックオフ基数",
@@ -142,18 +142,24 @@ def fetch_fields_for_numbers(pub_numbers, fields_list, chunk_size=14, field_name
     Publication number を前提に Clarivate Patents Search API から指定フィールドを取得
     - pub_numbers: list[str]
     - fields_list: list[str]
-    - chunk_size: fields を分割する単位（APIのフィールド上限対策）
+    - chunk_size: 1回に要求するフィールド数の上限
     - field_name: "PUBLICATION_NUMBER"
     """
     if not api_key:
         raise RuntimeError("X-ApiKey が未設定です（環境変数 IP_DATA_API も空です）。")
 
     merged = defaultdict(dict)  # key -> record
-    for fields_chunk in chunked(fields_list, chunk_size):
+
+    # 常に field_name を含めるため、chunk は (chunk_size - 1) ごとに分割し、先頭に field_name を付与
+    base_fields = [f for f in fields_list if f != field_name]
+    per_chunk = max(1, chunk_size - 1)
+    for fields_chunk in chunked(base_fields, per_chunk):
+        fields = [field_name] + list(fields_chunk)  # 常に PUBLICATION_NUMBER を含める
+
         payload = {
             "QUERY": [{"ALG": "BASIC", "FIELD": field_name, "OP": "IN", "VALUE": pub_numbers}],
             "LIMIT": len(pub_numbers),
-            "FIELDS": list(fields_chunk),
+            "FIELDS": fields,
         }
         r = requests.post(api_url, headers=HEADERS, json=payload, timeout=(timeout_connect, timeout_read))
         if r.status_code >= 500:
@@ -172,8 +178,10 @@ def fetch_fields_for_numbers(pub_numbers, fields_list, chunk_size=14, field_name
             continue
 
         for rec in rows:
-            key = rec.get("GUID") or rec.get("PUBLICATION_NUMBER")
-            if not key:
+            # 結合キーは PUBLICATION_NUMBER に統一
+            key = rec.get(field_name)
+            if not isinstance(key, str) or not key.strip():
+                # PUBLICATION_NUMBER が空のレコードはスキップ
                 continue
             merged[key].update(rec)
 
@@ -186,12 +194,17 @@ def write_rows_to_csv_string(rows, field_order=None):
     all_keys = set()
     for r in rows:
         all_keys.update(r.keys())
+
+    # PUBLICATION_NUMBER を先頭に
+    desired = ["PUBLICATION_NUMBER"]
     if field_order:
-        ordered = [f for f in field_order if f in all_keys]
-        ordered += sorted(k for k in all_keys if k not in (field_order or []))
-        fields = ordered
-    else:
-        fields = sorted(all_keys)
+        for f in field_order:
+            if f != "PUBLICATION_NUMBER":
+                desired.append(f)
+
+    ordered = [f for f in desired if f in all_keys]
+    ordered += sorted(k for k in all_keys if k not in set(ordered))
+    fields = ordered
 
     sio = StringIO()
     writer = csv.DictWriter(sio, fieldnames=fields, extrasaction="ignore")
@@ -254,8 +267,10 @@ if run:
                 field_chunk_size = int(FIELD_CHUNK)
             elif attempt == 2:
                 field_chunk_size = max(1, int(FIELD_CHUNK) // 2)
+            elif attempt == 3:
+                field_chunk_size = 4 # max(1, int(FIELD_CHUNK) // 4)
             else:
-                field_chunk_size = max(1, int(FIELD_CHUNK) // 4)
+                field_chunk_size = 2 # max(1, int(FIELD_CHUNK) // 4)
 
             st.session_state.log_lines.append(
                 f"  Attempt {attempt}: field={field_name}, field_chunk={field_chunk_size}, ids={len(ids_to_fetch)}"
@@ -282,9 +297,9 @@ if run:
                 if isinstance(rec.get(field_name), str) and rec[field_name].strip()
             }
 
-            # 結合（GUID優先→PUB）
+            # マージは PUBLICATION_NUMBER をキーに統一
             for rec in rows_chunk:
-                key = rec.get("GUID") or rec.get("PUBLICATION_NUMBER")
+                key = rec.get(field_name)
                 if not key:
                     continue
                 combined[key].update(rec)
