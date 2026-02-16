@@ -1,3 +1,6 @@
-streamlit>=1.30
-pandas>=2.0
+streamlit>=1.30.0,<2.0
+pandas>=2.0,<3.0
 requests>=2.31
+# Optional (pulled in by pandas/requests): python-dateutil, pytz
+python-dateutil>=2.8.2
+pytz>=2023.3
