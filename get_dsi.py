@@ -151,77 +151,31 @@ def _normalize_ids(raw_ids):
             ids.append(s)
     return ids
 
-def _post_with_in_fallback(values_list, fields, field_name, headers, timeout):
-    """
-    Clarivate Patents Search API へ POST。
-    - まず VALUE を配列（list[str]）で送る
-    - 非2xxなら、DWPI_ACCESSION_NUMBER のときはカンマ区切り文字列で再送（4xx/5xxどちらでも）
-    """
-    payload_arr = {
+
+def _post_basic_in_array(values_list, fields, field_name, headers, timeout):
+    """VALUE を配列で送る（Publication number 用）"""
+    payload = {
         "QUERY": [{"ALG": "BASIC", "FIELD": field_name, "OP": "IN", "VALUE": values_list}],
         "LIMIT": len(values_list),
         "FIELDS": fields,
     }
-    r = requests.post(api_url, headers=headers, json=payload_arr, timeout=timeout)
+    r = requests.post(api_url, headers=headers, json=payload, timeout=timeout)
+    r.raise_for_status()
+    return r.json()
 
-    # 1回目: 配列
-    if 200 <= r.status_code < 300:
-        return r.json()
 
-    # 非2xx → DWPI のみ文字列フォールバックを試す
-    if field_name == "DWPI_ACCESSION_NUMBER":
-        values_join = ",".join(values_list)
-        payload_str = {
-            "QUERY": [{"ALG": "BASIC", "FIELD": field_name, "OP": "IN", "VALUE": values_join}],
-            "LIMIT": len(values_list),
-            "FIELDS": fields,
-        }
-        r2 = requests.post(api_url, headers=headers, json=payload_str, timeout=timeout)
-        if 200 <= r2.status_code < 300:
-            return r2.json()
-        # 文字列でもダメなら詳細を投げる
-        raise requests.exceptions.HTTPError(
-            f"DWPI fallback also failed. First={r.status_code}:{r.text} Second={r2.status_code}:{r2.text}",
-            response=r2
-        )
 
-    # PubNo は配列が正しい仕様なので、そのまま例外
-    raise requests.exceptions.HTTPError(
-        f"Request failed with status {r.status_code}: {r.text}", response=r
-    )
-
-# def _post_with_in_fallback(values_list, fields, field_name, headers, timeout):
-#     """
-#     Clarivate Patents Search API へ POST。
-#     - まず VALUE を配列（list[str]）で送る
-#     - エラー時、DWPI_ACCESSION_NUMBER のときはカンマ区切り文字列で再送
-#     """
-#     payload_arr = {
-#         "QUERY": [{"ALG": "BASIC", "FIELD": field_name, "OP": "IN", "VALUE": values_list}],
-#         "LIMIT": len(values_list),
-#         "FIELDS": fields,
-#     }
-#     r = requests.post(api_url, headers=headers, json=payload_arr, timeout=timeout)
-#     if r.status_code >= 500:
-#         raise requests.exceptions.HTTPError(f"Server error {r.status_code}: {r.text}", response=r)
-#     try:
-#         r.raise_for_status()
-#         return r.json()
-#     except requests.HTTPError as e:
-#         if field_name == "DWPI_ACCESSION_NUMBER":
-#             values_join = ",".join(values_list)
-#             payload_str = {
-#                 "QUERY": [{"ALG": "BASIC", "FIELD": field_name, "OP": "IN", "VALUE": values_join}],
-#                 "LIMIT": len(values_list),
-#                 "FIELDS": fields,
-#             }
-#             r2 = requests.post(api_url, headers=headers, json=payload_str, timeout=timeout)
-#             if r2.status_code >= 500:
-#                 raise requests.exceptions.HTTPError(f"Server error {r2.status_code}: {r2.text}", response=r2)
-#             r2.raise_for_status()
-#             return r2.json()
-#         raise e
-
+def _post_basic_in_string(values_list, fields, field_name, headers, timeout):
+    """VALUE をカンマ区切り文字列で送る（DWPI 用）"""
+    values_join = ",".join(values_list)
+    payload = {
+        "QUERY": [{"ALG": "BASIC", "FIELD": field_name, "OP": "IN", "VALUE": values_join}],
+        "LIMIT": len(values_list),
+        "FIELDS": fields,
+    }
+    r = requests.post(api_url, headers=headers, json=payload, timeout=timeout)
+    r.raise_for_status()
+    return r.json()
 
 def fetch_fields_for_numbers(id_list, fields_list, chunk_size=14, field_name="PUBLICATION_NUMBER", headers=None, timeout=(10, 90)):
     """
@@ -233,7 +187,6 @@ def fetch_fields_for_numbers(id_list, fields_list, chunk_size=14, field_name="PU
     - headers: dict (X-ApiKey など)
     - timeout: (connect, read)
     """
-
 
     if not headers or not headers.get("X-ApiKey"):
         raise RuntimeError("X-ApiKey が未設定です（環境変数 IP_DATA_API も空です）。")
@@ -247,8 +200,15 @@ def fetch_fields_for_numbers(id_list, fields_list, chunk_size=14, field_name="PU
         fields = [field_name] + list(fields_chunk)
 
         # 値は配列で渡す（DWPIのみ内部で文字列フォールバック）
+        # values_list = [str(v).strip() for v in id_list if str(v).strip()]
+        # js = _post_with_in_fallback(values_list, fields, field_name, headers, timeout)
+
         values_list = [str(v).strip() for v in id_list if str(v).strip()]
-        js = _post_with_in_fallback(values_list, fields, field_name, headers, timeout)
+        # 送信形式の切り替え：DWPIは最初から文字列、PubNoは配列
+        if field_name == "DWPI_ACCESSION_NUMBER":
+            js = _post_basic_in_string(values_list, fields, field_name, headers, timeout)
+        else:
+            js = _post_basic_in_array(values_list, fields, field_name, headers, timeout)
 
         rows = js.get("result") if isinstance(js, dict) and "result" in js else None
         if rows is None and isinstance(js, dict):
@@ -307,6 +267,12 @@ def write_rows_to_csv_string(rows, key_field="PUBLICATION_NUMBER", field_order=N
 
 # ---------------- Run (取得実行) ----------------
 if run:
+    # 取得用フィールドの確定（DWPI時は PUBLICATION_NUMBER を除外）
+    if field_name == "DWPI_ACCESSION_NUMBER":
+        effective_fields = [f for f in selected_fields if f != "PUBLICATION_NUMBER"]
+    else:
+        effective_fields = selected_fields
+
     # 入力の組み立て：アップロードがあれば優先、なければテキストエリア
     if uploaded is not None:
         text = uploaded.read().decode("utf-8")
@@ -327,6 +293,7 @@ if run:
     status_main.write("処理を開始しました…")
 
     combined = defaultdict(dict)
+
     chunks = list(chunked(input_ids, int(ID_CHUNK)))
     total_chunks = len(chunks)
 
@@ -360,11 +327,11 @@ if run:
             log_box_sidebar.text("\n".join(st.session_state.log_lines))
 
             
-            # 取得用フィールドの確定（DWPI時は PUBLICATION_NUMBER を除外）
-            if field_name == "DWPI_ACCESSION_NUMBER":
-                effective_fields = [f for f in selected_fields if f != "PUBLICATION_NUMBER"]
-            else:
-                effective_fields = selected_fields
+            # # 取得用フィールドの確定（DWPI時は PUBLICATION_NUMBER を除外）
+            # if field_name == "DWPI_ACCESSION_NUMBER":
+            #     effective_fields = [f for f in selected_fields if f != "PUBLICATION_NUMBER"]
+            # else:
+            #     effective_fields = selected_fields
 
             try:
                 rows_chunk = fetch_fields_for_numbers(
