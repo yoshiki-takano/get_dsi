@@ -1,7 +1,6 @@
-
 # dsi_fetcher_app.py
 # ------------------------------------------------------------
-# Clarivate Patents Search API（Publication number前提）
+# Clarivate Patents Search API（Publication number / DWPI Accession number 対応）
 # ・メイン：ファイルアップロード／テキスト入力／実行ボタン／進捗／結果表示／CSVダウンロード
 # ・サイドバー：API設定／取得フィールド／パラメータ／詳細ログ
 # ・CSVダウンロード後も表が残るよう、結果を st.session_state に保持
@@ -20,7 +19,7 @@ import streamlit as st
 import pandas as pd
 
 # ---------------- Page Config ----------------
-st.set_page_config(page_title="Derwent Strength Index Fetcher（Publication Number）", layout="wide")
+st.set_page_config(page_title="Derwent Strength Index Fetcher（PubNo / DWPI Accession）", layout="wide")
 
 # ---------------- Session State Init ----------------
 # ダウンロード後の再実行でも結果を維持するために初期化
@@ -40,11 +39,8 @@ st.sidebar.title("設定")
 
 # API設定
 DEFAULT_API_URL = "https://api.clarivate.com/patents/search/"
-ALT_API_URL = "https://api.clarivate.com/search/patents/document/json/"  # 代替
-# api_url = st.sidebar.selectbox("API Endpoint", [DEFAULT_API_URL], index=0) #現状一つのみ, ALT_API_URL
+# 代替の古い/別形態のエンドポイントがある場合は必要に応じて切替
 api_url = DEFAULT_API_URL
-
-# api_key_env = os.environ.get("IP_DATA_API", "")
 
 def get_api_key() -> str:
     # Cloud/ローカルいずれでも st.secrets が最優先
@@ -55,7 +51,6 @@ def get_api_key() -> str:
         return os.environ.get("IP_DATA_API", "")
 
 api_key = get_api_key()
-
 api_key = st.sidebar.text_input("X-ApiKey", value=api_key, type="password")
 
 # タイムアウト設定
@@ -63,11 +58,13 @@ with st.sidebar.expander("タイムアウト", expanded=False):
     timeout_connect = st.number_input("接続タイムアウト(秒)", min_value=1, value=10, step=1, key="TIMEOUT_CONNECT")
     timeout_read    = st.number_input("読み取りタイムアウト(秒)", min_value=10, value=90, step=1, key="TIMEOUT_READ")
 
-HEADERS = {"Accept": "application/json", "Content-Type": "application/json", "X-ApiKey": api_key}
+# 注意：headers は毎回最新の api_key を反映する
+def build_headers(x_api_key: str) -> dict:
+    return {"Accept": "application/json", "Content-Type": "application/json", "X-ApiKey": x_api_key}
 
 # 取得フィールド（必要に応じて追加）
-DEFAULT_FIELDS = [
-    # "GUID", "DWPI_ACCESSION_NUMBER", 
+DEFAULT_FIELDS_BASE = [
+    # "GUID", "DWPI_ACCESSION_NUMBER",  # join key は内部で必ず補完されるため UI から外してもOK
     "PUBLICATION_NUMBER",
     "DSI_STRENGTH_INDEX",
     "DSI_INVENTION_GLOBALIZATION_SCORE", "DSI_INVENTION_INFLUENCE_SCORE",
@@ -75,7 +72,7 @@ DEFAULT_FIELDS = [
     "DSI_AVERAGE_SCORE", "DSI_YEARS_REMAINING", "DSI_AGE_DISCOUNT",
 ]
 with st.sidebar.expander("取得フィールド", expanded=False):
-    selected_fields = st.multiselect("Fields", DEFAULT_FIELDS, default=DEFAULT_FIELDS)
+    selected_fields = st.multiselect("Fields", DEFAULT_FIELDS_BASE, default=DEFAULT_FIELDS_BASE)
 
 # パラメータ（Expanderで初期は閉じる）
 with st.sidebar.expander("パラメータ", expanded=False):
@@ -96,21 +93,29 @@ with st.sidebar.expander("パラメータ", expanded=False):
         min_value=0.5, value=1.0, step=0.5, key="BACKOFF_BASE"
     )
 
-
 # 詳細ログ（サイドバー）
 log_box_sidebar = st.sidebar.empty()
-# st.sidebar.info("Publication number 前提。リトライ時は FIELD_CHUNK を段階的に縮小（例：14→7→4）。")
 
 # ---------------- Main: タイトル・入力・実行・進捗・結果 ----------------
-st.title("Derwent Strength Index Fetcher\n（公報番号検索のみ対応）")
-st.caption("Clarivate Patents Search API を用いて、Publication numberリストから指定フィールドを取得します。")
+st.title("Derwent Strength Index Fetcher")
+st.caption("Clarivate Patents Search API を用いて、Publication number または DWPI Accession number のリストから DSI 関連フィールドを取得します。")
+
+# 入力キーの選択
+id_type = st.radio("検索キー（ID 種別）", ["Publication number", "DWPI accession number"], horizontal=True, index=0)
+if id_type == "Publication number":
+    field_name = "PUBLICATION_NUMBER"
+    example_text = "例:\nWO2021243294A1\nJP07737400B2\nUS20210374460A1"
+    page_hint = "Publication number（1行＝1件）"
+else:
+    field_name = "DWPI_ACCESSION_NUMBER"
+    example_text = "例:\n2019422485\n1990099416\n2013F51294\n2008N95044"
+    page_hint = "DWPI accession number（1行＝1件）"
 
 # 入力（メイン）：ファイルアップロード＋テキスト
 st.subheader("入力")
 uploaded = st.file_uploader("テキストファイルをアップロード（1行＝1件、# 行はコメント）", type=["txt"])
 st.text("または下のテキストボックスに貼り付け（アップロードがあればそちらを優先）")
-pubs_text = st.text_area("Publication number（1行＝1件）", height=160,
-                         placeholder="例:\nWO2021243294A1\nJP07737400B2\nUS20210374460A1")
+ids_text = st.text_area(page_hint, height=160, placeholder=example_text)
 
 # 実行／結果クリア ボタン（メイン）
 col_run = st.columns(2)
@@ -137,35 +142,78 @@ def chunked(iterable, n):
     for i in range(0, len(iterable), n):
         yield iterable[i : i + n]
 
-def fetch_fields_for_numbers(pub_numbers, fields_list, chunk_size=14, field_name="PUBLICATION_NUMBER"):
+def _normalize_ids(raw_ids):
+    """空行・コメント行を除外し、すべて 'str' に強制変換してトリム"""
+    ids = []
+    for x in raw_ids:
+        s = str(x).strip()
+        if s and not s.startswith("#"):
+            ids.append(s)
+    return ids
+
+def _post_with_in_fallback(values_str_list, fields, field_name, headers, timeout):
     """
-    Publication number を前提に Clarivate Patents Search API から指定フィールドを取得
-    - pub_numbers: list[str]
+    Clarivate Patents Search API へ POST。
+    - まず VALUE を配列（list[str]）で送る
+    - エラー時、カンマ区切り文字列へフォールバック（DWPI_ACCESSION_NUMBER で有効なケースあり）
+    戻り値: Python dict (json)
+    例外: requests.HTTPError を透過
+    """
+    # 1) 配列形式
+    payload_arr = {
+        "QUERY": [{"ALG": "BASIC", "FIELD": field_name, "OP": "IN", "VALUE": values_str_list}],
+        "LIMIT": len(values_str_list),
+        "FIELDS": fields,
+    }
+    r = requests.post(api_url, headers=headers, json=payload_arr, timeout=timeout)
+    # 5xx は即例外
+    if r.status_code >= 500:
+        raise requests.exceptions.HTTPError(f"Server error {r.status_code}: {r.text}", response=r)
+    try:
+        r.raise_for_status()
+        return r.json()
+    except requests.HTTPError as e:
+        # 4xx の一部で、VALUE の配列 → 文字列への変換で通る場合がある
+        if field_name == "DWPI_ACCESSION_NUMBER":
+            values_join = ",".join(values_str_list)
+            payload_str = {
+                "QUERY": [{"ALG": "BASIC", "FIELD": field_name, "OP": "IN", "VALUE": values_join}],
+                "LIMIT": len(values_str_list),
+                "FIELDS": fields,
+            }
+            r2 = requests.post(api_url, headers=headers, json=payload_str, timeout=timeout)
+            if r2.status_code >= 500:
+                raise requests.exceptions.HTTPError(f"Server error {r2.status_code}: {r2.text}", response=r2)
+            r2.raise_for_status()
+            return r2.json()
+        # それ以外はそのまま例外
+        raise e
+
+def fetch_fields_for_numbers(id_list, fields_list, chunk_size=14, field_name="PUBLICATION_NUMBER", headers=None, timeout=(10, 90)):
+    """
+    指定フィールドを Clarivate Patents Search API から取得
+    - id_list: list[str]
     - fields_list: list[str]
-    - chunk_size: 1回に要求するフィールド数の上限
-    - field_name: "PUBLICATION_NUMBER"
+    - chunk_size: 1回に要求するフィールド数の上限（field_name を必ず含めるため、実質 chunk_size-1）
+    - field_name: "PUBLICATION_NUMBER" or "DWPI_ACCESSION_NUMBER"
+    - headers: dict (X-ApiKey など)
+    - timeout: (connect, read)
     """
-    if not api_key:
+    if not headers or not headers.get("X-ApiKey"):
         raise RuntimeError("X-ApiKey が未設定です（環境変数 IP_DATA_API も空です）。")
 
-    merged = defaultdict(dict)  # key -> record
+    merged = defaultdict(dict)
 
     # 常に field_name を含めるため、chunk は (chunk_size - 1) ごとに分割し、先頭に field_name を付与
     base_fields = [f for f in fields_list if f != field_name]
     per_chunk = max(1, chunk_size - 1)
     for fields_chunk in chunked(base_fields, per_chunk):
-        fields = [field_name] + list(fields_chunk)  # 常に PUBLICATION_NUMBER を含める
+        fields = [field_name] + list(fields_chunk)  # 常にキーを含める
 
-        payload = {
-            "QUERY": [{"ALG": "BASIC", "FIELD": field_name, "OP": "IN", "VALUE": pub_numbers}],
-            "LIMIT": len(pub_numbers),
-            "FIELDS": fields,
-        }
-        r = requests.post(api_url, headers=HEADERS, json=payload, timeout=(timeout_connect, timeout_read))
-        if r.status_code >= 500:
-            raise requests.exceptions.HTTPError(f"Server error {r.status_code}: {r.text}", response=r)
-        r.raise_for_status()
-        js = r.json()
+        # API 側で数値として解釈されるのを避けるため明示的に文字列化
+        values_str_list = ",".join([str(v).strip() for v in id_list if str(v).strip()])
+
+        js = _post_with_in_fallback(values_str_list, fields, field_name, headers, timeout)
 
         # "result" または配列を持つキーを探索
         rows = js.get("result") if isinstance(js, dict) and "result" in js else None
@@ -178,28 +226,29 @@ def fetch_fields_for_numbers(pub_numbers, fields_list, chunk_size=14, field_name
             continue
 
         for rec in rows:
-            # 結合キーは PUBLICATION_NUMBER に統一
             key = rec.get(field_name)
             if not isinstance(key, str) or not key.strip():
-                # PUBLICATION_NUMBER が空のレコードはスキップ
                 continue
             merged[key].update(rec)
 
     return list(merged.values())
 
-def write_rows_to_csv_string(rows, field_order=None):
-    """UTF-8 BOM付きCSV文字列（ダウンロードボタン用）"""
+def write_rows_to_csv_string(rows, key_field="PUBLICATION_NUMBER", field_order=None):
+    """UTF-8 BOM付きCSV文字列（ダウンロードボタン用）。
+    先頭列は key_field を最優先に配置。
+    """
     if not rows:
         return ""
     all_keys = set()
     for r in rows:
         all_keys.update(r.keys())
 
-    # PUBLICATION_NUMBER を先頭に
-    desired = ["PUBLICATION_NUMBER"]
+    # 先頭は key_field（存在すれば）
+    desired = [key_field]
+    # UI 指定順を尊重（key_field は二重追加しない）
     if field_order:
         for f in field_order:
-            if f != "PUBLICATION_NUMBER":
+            if f != key_field:
                 desired.append(f)
 
     ordered = [f for f in desired if f in all_keys]
@@ -227,12 +276,12 @@ if run:
     # 入力の組み立て：アップロードがあれば優先、なければテキストエリア
     if uploaded is not None:
         text = uploaded.read().decode("utf-8")
-        pubs = [ln.strip() for ln in text.splitlines() if ln.strip() and not ln.strip().startswith("#")]
+        input_ids = _normalize_ids(text.splitlines())
     else:
-        pubs = [ln.strip() for ln in pubs_text.splitlines() if ln.strip()]
+        input_ids = _normalize_ids(ids_text.splitlines())
 
-    if not pubs:
-        st.warning("Publication number が入力されていません。")
+    if not input_ids:
+        st.warning(f"{'Publication number' if field_name=='PUBLICATION_NUMBER' else 'DWPI accession number'} が入力されていません。")
         st.stop()
     if not api_key:
         st.error("X-ApiKey が未設定です。")
@@ -244,7 +293,7 @@ if run:
     status_main.write("処理を開始しました…")
 
     combined = defaultdict(dict)
-    chunks = list(chunked(pubs, int(ID_CHUNK)))
+    chunks = list(chunked(input_ids, int(ID_CHUNK)))
     total_chunks = len(chunks)
 
     for idx, id_chunk in enumerate(chunks, start=1):
@@ -261,16 +310,15 @@ if run:
             if not ids_to_fetch:
                 break
 
-            # Publication number前提でフィールドチャンクを縮小
-            field_name = "PUBLICATION_NUMBER"
+            # フィールドチャンクを縮小
             if attempt == 1:
                 field_chunk_size = int(FIELD_CHUNK)
             elif attempt == 2:
                 field_chunk_size = max(1, int(FIELD_CHUNK) // 2)
             elif attempt == 3:
-                field_chunk_size = 4 # max(1, int(FIELD_CHUNK) // 4)
+                field_chunk_size = 4
             else:
-                field_chunk_size = 2 # max(1, int(FIELD_CHUNK) // 4)
+                field_chunk_size = 2
 
             st.session_state.log_lines.append(
                 f"  Attempt {attempt}: field={field_name}, field_chunk={field_chunk_size}, ids={len(ids_to_fetch)}"
@@ -279,7 +327,12 @@ if run:
 
             try:
                 rows_chunk = fetch_fields_for_numbers(
-                    ids_to_fetch, selected_fields, chunk_size=field_chunk_size, field_name=field_name
+                    ids_to_fetch,
+                    selected_fields,
+                    chunk_size=field_chunk_size,
+                    field_name=field_name,
+                    headers=build_headers(api_key),
+                    timeout=(timeout_connect, timeout_read)
                 )
             except Exception as e:
                 st.session_state.log_lines.append(f"  Error fetching (attempt {attempt}): {e}")
@@ -297,7 +350,7 @@ if run:
                 if isinstance(rec.get(field_name), str) and rec[field_name].strip()
             }
 
-            # マージは PUBLICATION_NUMBER をキーに統一
+            # マージは選択キーを統一
             for rec in rows_chunk:
                 key = rec.get(field_name)
                 if not key:
@@ -332,7 +385,11 @@ if run:
         st.session_state.rows = rows
         st.session_state.df = df
         st.session_state.ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        st.session_state.csv_str = write_rows_to_csv_string(rows, field_order=selected_fields)
+        st.session_state.csv_str = write_rows_to_csv_string(
+            rows,
+            key_field=field_name,
+            field_order=selected_fields
+        )
         status_main.write("全チャンクの処理が完了しました。")
     else:
         st.session_state.rows = None
@@ -352,6 +409,5 @@ if st.session_state.df is not None:
         data=st.session_state.csv_str,
         file_name=f"{st.session_state.ts}_dsi_output.csv",
         mime="text/csv",
-        key="download_csv",  # rerun時も安定させるためのキー
+        key="download_csv",
     )
-
