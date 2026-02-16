@@ -151,12 +151,11 @@ def _normalize_ids(raw_ids):
             ids.append(s)
     return ids
 
-
 def _post_with_in_fallback(values_list, fields, field_name, headers, timeout):
     """
     Clarivate Patents Search API へ POST。
     - まず VALUE を配列（list[str]）で送る
-    - エラー時、DWPI_ACCESSION_NUMBER のときはカンマ区切り文字列で再送
+    - 非2xxなら、DWPI_ACCESSION_NUMBER のときはカンマ区切り文字列で再送（4xx/5xxどちらでも）
     """
     payload_arr = {
         "QUERY": [{"ALG": "BASIC", "FIELD": field_name, "OP": "IN", "VALUE": values_list}],
@@ -164,25 +163,64 @@ def _post_with_in_fallback(values_list, fields, field_name, headers, timeout):
         "FIELDS": fields,
     }
     r = requests.post(api_url, headers=headers, json=payload_arr, timeout=timeout)
-    if r.status_code >= 500:
-        raise requests.exceptions.HTTPError(f"Server error {r.status_code}: {r.text}", response=r)
-    try:
-        r.raise_for_status()
+
+    # 1回目: 配列
+    if 200 <= r.status_code < 300:
         return r.json()
-    except requests.HTTPError as e:
-        if field_name == "DWPI_ACCESSION_NUMBER":
-            values_join = ",".join(values_list)
-            payload_str = {
-                "QUERY": [{"ALG": "BASIC", "FIELD": field_name, "OP": "IN", "VALUE": values_join}],
-                "LIMIT": len(values_list),
-                "FIELDS": fields,
-            }
-            r2 = requests.post(api_url, headers=headers, json=payload_str, timeout=timeout)
-            if r2.status_code >= 500:
-                raise requests.exceptions.HTTPError(f"Server error {r2.status_code}: {r2.text}", response=r2)
-            r2.raise_for_status()
+
+    # 非2xx → DWPI のみ文字列フォールバックを試す
+    if field_name == "DWPI_ACCESSION_NUMBER":
+        values_join = ",".join(values_list)
+        payload_str = {
+            "QUERY": [{"ALG": "BASIC", "FIELD": field_name, "OP": "IN", "VALUE": values_join}],
+            "LIMIT": len(values_list),
+            "FIELDS": fields,
+        }
+        r2 = requests.post(api_url, headers=headers, json=payload_str, timeout=timeout)
+        if 200 <= r2.status_code < 300:
             return r2.json()
-        raise e
+        # 文字列でもダメなら詳細を投げる
+        raise requests.exceptions.HTTPError(
+            f"DWPI fallback also failed. First={r.status_code}:{r.text} Second={r2.status_code}:{r2.text}",
+            response=r2
+        )
+
+    # PubNo は配列が正しい仕様なので、そのまま例外
+    raise requests.exceptions.HTTPError(
+        f"Request failed with status {r.status_code}: {r.text}", response=r
+    )
+
+# def _post_with_in_fallback(values_list, fields, field_name, headers, timeout):
+#     """
+#     Clarivate Patents Search API へ POST。
+#     - まず VALUE を配列（list[str]）で送る
+#     - エラー時、DWPI_ACCESSION_NUMBER のときはカンマ区切り文字列で再送
+#     """
+#     payload_arr = {
+#         "QUERY": [{"ALG": "BASIC", "FIELD": field_name, "OP": "IN", "VALUE": values_list}],
+#         "LIMIT": len(values_list),
+#         "FIELDS": fields,
+#     }
+#     r = requests.post(api_url, headers=headers, json=payload_arr, timeout=timeout)
+#     if r.status_code >= 500:
+#         raise requests.exceptions.HTTPError(f"Server error {r.status_code}: {r.text}", response=r)
+#     try:
+#         r.raise_for_status()
+#         return r.json()
+#     except requests.HTTPError as e:
+#         if field_name == "DWPI_ACCESSION_NUMBER":
+#             values_join = ",".join(values_list)
+#             payload_str = {
+#                 "QUERY": [{"ALG": "BASIC", "FIELD": field_name, "OP": "IN", "VALUE": values_join}],
+#                 "LIMIT": len(values_list),
+#                 "FIELDS": fields,
+#             }
+#             r2 = requests.post(api_url, headers=headers, json=payload_str, timeout=timeout)
+#             if r2.status_code >= 500:
+#                 raise requests.exceptions.HTTPError(f"Server error {r2.status_code}: {r2.text}", response=r2)
+#             r2.raise_for_status()
+#             return r2.json()
+#         raise e
 
 
 def fetch_fields_for_numbers(id_list, fields_list, chunk_size=14, field_name="PUBLICATION_NUMBER", headers=None, timeout=(10, 90)):
@@ -321,10 +359,17 @@ if run:
             )
             log_box_sidebar.text("\n".join(st.session_state.log_lines))
 
+            
+            # 取得用フィールドの確定（DWPI時は PUBLICATION_NUMBER を除外）
+            if field_name == "DWPI_ACCESSION_NUMBER":
+                effective_fields = [f for f in selected_fields if f != "PUBLICATION_NUMBER"]
+            else:
+                effective_fields = selected_fields
+
             try:
                 rows_chunk = fetch_fields_for_numbers(
                     ids_to_fetch,
-                    selected_fields,
+                    effective_fields, # selected_fields,
                     chunk_size=field_chunk_size,
                     field_name=field_name,
                     headers=build_headers(api_key),
@@ -384,7 +429,7 @@ if run:
         st.session_state.csv_str = write_rows_to_csv_string(
             rows,
             key_field=field_name,
-            field_order=selected_fields
+            field_order=effective_fields # selected_fields
         )
         status_main.write("全チャンクの処理が完了しました。")
     else:
