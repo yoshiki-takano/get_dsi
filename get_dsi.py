@@ -151,34 +151,30 @@ def _normalize_ids(raw_ids):
             ids.append(s)
     return ids
 
-def _post_with_in_fallback(values_str_list, fields, field_name, headers, timeout):
+
+def _post_with_in_fallback(values_list, fields, field_name, headers, timeout):
     """
     Clarivate Patents Search API へ POST。
     - まず VALUE を配列（list[str]）で送る
-    - エラー時、カンマ区切り文字列へフォールバック（DWPI_ACCESSION_NUMBER で有効なケースあり）
-    戻り値: Python dict (json)
-    例外: requests.HTTPError を透過
+    - エラー時、DWPI_ACCESSION_NUMBER のときはカンマ区切り文字列で再送
     """
-    # 1) 配列形式
     payload_arr = {
-        "QUERY": [{"ALG": "BASIC", "FIELD": field_name, "OP": "IN", "VALUE": values_str_list}],
-        "LIMIT": len(values_str_list),
+        "QUERY": [{"ALG": "BASIC", "FIELD": field_name, "OP": "IN", "VALUE": values_list}],
+        "LIMIT": len(values_list),
         "FIELDS": fields,
     }
     r = requests.post(api_url, headers=headers, json=payload_arr, timeout=timeout)
-    # 5xx は即例外
     if r.status_code >= 500:
         raise requests.exceptions.HTTPError(f"Server error {r.status_code}: {r.text}", response=r)
     try:
         r.raise_for_status()
         return r.json()
     except requests.HTTPError as e:
-        # 4xx の一部で、VALUE の配列 → 文字列への変換で通る場合がある
         if field_name == "DWPI_ACCESSION_NUMBER":
-            values_join = ",".join(values_str_list)
+            values_join = ",".join(values_list)
             payload_str = {
                 "QUERY": [{"ALG": "BASIC", "FIELD": field_name, "OP": "IN", "VALUE": values_join}],
-                "LIMIT": len(values_str_list),
+                "LIMIT": len(values_list),
                 "FIELDS": fields,
             }
             r2 = requests.post(api_url, headers=headers, json=payload_str, timeout=timeout)
@@ -186,8 +182,8 @@ def _post_with_in_fallback(values_str_list, fields, field_name, headers, timeout
                 raise requests.exceptions.HTTPError(f"Server error {r2.status_code}: {r2.text}", response=r2)
             r2.raise_for_status()
             return r2.json()
-        # それ以外はそのまま例外
         raise e
+
 
 def fetch_fields_for_numbers(id_list, fields_list, chunk_size=14, field_name="PUBLICATION_NUMBER", headers=None, timeout=(10, 90)):
     """
@@ -199,23 +195,23 @@ def fetch_fields_for_numbers(id_list, fields_list, chunk_size=14, field_name="PU
     - headers: dict (X-ApiKey など)
     - timeout: (connect, read)
     """
+
+
     if not headers or not headers.get("X-ApiKey"):
         raise RuntimeError("X-ApiKey が未設定です（環境変数 IP_DATA_API も空です）。")
 
     merged = defaultdict(dict)
 
-    # 常に field_name を含めるため、chunk は (chunk_size - 1) ごとに分割し、先頭に field_name を付与
+    # field_name は必ず含める（結合キー）
     base_fields = [f for f in fields_list if f != field_name]
     per_chunk = max(1, chunk_size - 1)
     for fields_chunk in chunked(base_fields, per_chunk):
-        fields = [field_name] + list(fields_chunk)  # 常にキーを含める
+        fields = [field_name] + list(fields_chunk)
 
-        # API 側で数値として解釈されるのを避けるため明示的に文字列化
-        values_str_list = ",".join([str(v).strip() for v in id_list if str(v).strip()])
+        # 値は配列で渡す（DWPIのみ内部で文字列フォールバック）
+        values_list = [str(v).strip() for v in id_list if str(v).strip()]
+        js = _post_with_in_fallback(values_list, fields, field_name, headers, timeout)
 
-        js = _post_with_in_fallback(values_str_list, fields, field_name, headers, timeout)
-
-        # "result" または配列を持つキーを探索
         rows = js.get("result") if isinstance(js, dict) and "result" in js else None
         if rows is None and isinstance(js, dict):
             for k, v in js.items():
@@ -227,11 +223,11 @@ def fetch_fields_for_numbers(id_list, fields_list, chunk_size=14, field_name="PU
 
         for rec in rows:
             key = rec.get(field_name)
-            if not isinstance(key, str) or not key.strip():
-                continue
-            merged[key].update(rec)
+            if isinstance(key, str) and key.strip():
+                merged[key].update(rec)
 
     return list(merged.values())
+
 
 def write_rows_to_csv_string(rows, key_field="PUBLICATION_NUMBER", field_order=None):
     """UTF-8 BOM付きCSV文字列（ダウンロードボタン用）。
@@ -411,4 +407,3 @@ if st.session_state.df is not None:
         mime="text/csv",
         key="download_csv",
     )
-    
