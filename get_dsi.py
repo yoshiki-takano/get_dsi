@@ -152,21 +152,63 @@ def _normalize_ids(raw_ids):
     return ids
 
 
+# def _post_basic_in_array(values_list, fields, field_name, headers, timeout):
+#     """VALUE を配列で送る（Publication number 用）"""
+#     payload = {
+#         "QUERY": [{"ALG": "BASIC", "FIELD": field_name, "OP": "IN", "VALUE": values_list}],
+#         "LIMIT": len(values_list),
+#         "FIELDS": fields,
+#     }
+#     r = requests.post(api_url, headers=headers, json=payload, timeout=timeout)
+#     if 200 <= r.status_code < 300:
+#         st.session_state.log_lines.append("POST IN: array OK") 
+#         log_box_sidebar.text("\n".join(st.session_state.log_lines))
+#     r.raise_for_status()
+#     return r.json()
+
+#     # 429（レート制限）のときは Retry-After を1回だけ尊重して再送
+#     if r.status_code == 429:
+#         try:
+#             retry_after = int(r.headers.get("Retry-After", "3"))
+#         except Exception:
+#             retry_after = 3
+#         retry_after = max(1, min(30, retry_after))
+#         st.session_state.log_lines.append(f"POST IN: array got 429; retrying after {retry_after}s")
+#         log_box_sidebar.text("\n".join(st.session_state.log_lines))
+#         time.sleep(retry_after)
+#         r2 = requests.post(api_url, headers=headers, json=payload, timeout=timeout)
+#         if 200 <= r2.status_code < 300:
+#             st.session_state.log_lines.append("POST IN: array OK (after 429 retry)")
+#             log_box_sidebar.text("\n".join(st.session_state.log_lines))
+#             return r2.json()
+#         # 再送もダメなら詳細を出して例外
+#         st.session_state.log_lines.append(f"POST IN: array retry failed {r2.status_code}: {r2.text}")
+#         log_box_sidebar.text("\n".join(st.session_state.log_lines))
+#         r2.raise_for_status()
+
+#     # 2xxでも429でもない → ログに残して例外
+#     st.session_state.log_lines.append(f"POST IN: array failed {r.status_code}: {r.text}")
+#     log_box_sidebar.text("\n".join(st.session_state.log_lines))
+#     r.raise_for_status()  # ここで例外
+#     return r.json()       # 到達しないが型整合のため
+
 def _post_basic_in_array(values_list, fields, field_name, headers, timeout):
     """VALUE を配列で送る（Publication number 用）"""
+    values_list = [str(v).strip() for v in values_list if str(v).strip()]
     payload = {
         "QUERY": [{"ALG": "BASIC", "FIELD": field_name, "OP": "IN", "VALUE": values_list}],
         "LIMIT": len(values_list),
         "FIELDS": fields,
     }
     r = requests.post(api_url, headers=headers, json=payload, timeout=timeout)
-    if 200 <= r.status_code < 300:
-        st.session_state.log_lines.append("POST IN: array OK") 
-        log_box_sidebar.text("\n".join(st.session_state.log_lines))
-    r.raise_for_status()
-    return r.json()
 
-    # 429（レート制限）のときは Retry-After を1回だけ尊重して再送
+    # 2xx → OK
+    if 200 <= r.status_code < 300:
+        st.session_state.log_lines.append("POST IN: array OK")
+        log_box_sidebar.text("\n".join(st.session_state.log_lines))
+        return r.json()
+
+    # 429 → Retry-After を尊重して 1 回だけ再送
     if r.status_code == 429:
         try:
             retry_after = int(r.headers.get("Retry-After", "3"))
@@ -181,21 +223,20 @@ def _post_basic_in_array(values_list, fields, field_name, headers, timeout):
             st.session_state.log_lines.append("POST IN: array OK (after 429 retry)")
             log_box_sidebar.text("\n".join(st.session_state.log_lines))
             return r2.json()
-        # 再送もダメなら詳細を出して例外
         st.session_state.log_lines.append(f"POST IN: array retry failed {r2.status_code}: {r2.text}")
         log_box_sidebar.text("\n".join(st.session_state.log_lines))
         r2.raise_for_status()
 
-    # 2xxでも429でもない → ログに残して例外
+    # その他の非2xx → 失敗ログ → 例外
     st.session_state.log_lines.append(f"POST IN: array failed {r.status_code}: {r.text}")
     log_box_sidebar.text("\n".join(st.session_state.log_lines))
-    r.raise_for_status()  # ここで例外
-    return r.json()       # 到達しないが型整合のため
-
+    r.raise_for_status()
+    return r.json()  # 到達しないが型整合のため
 
 
 def _post_basic_in_string(values_list, fields, field_name, headers, timeout):
     """VALUE をカンマ区切り文字列で送る（DWPI 用）"""
+    values_list = [str(v).strip() for v in values_list if str(v).strip()]
     values_join = ",".join(values_list)
     payload = {
         "QUERY": [{"ALG": "BASIC", "FIELD": field_name, "OP": "IN", "VALUE": values_join}],
@@ -203,13 +244,14 @@ def _post_basic_in_string(values_list, fields, field_name, headers, timeout):
         "FIELDS": fields,
     }
     r = requests.post(api_url, headers=headers, json=payload, timeout=timeout)
-    if 200 <= r.status_code < 300:
-        st.session_state.log_lines.append("POST IN: string OK") 
-        log_box_sidebar.text("\n".join(st.session_state.log_lines))
-    r.raise_for_status()
-    return r.json()
 
-    # 429（レート制限）のときは Retry-After を1回だけ尊重して再送
+    # 2xx → OK
+    if 200 <= r.status_code < 300:
+        st.session_state.log_lines.append("POST IN: string OK")
+        log_box_sidebar.text("\n".join(st.session_state.log_lines))
+        return r.json()
+
+    # 429 → Retry-After を尊重して 1 回だけ再送
     if r.status_code == 429:
         try:
             retry_after = int(r.headers.get("Retry-After", "3"))
@@ -224,16 +266,57 @@ def _post_basic_in_string(values_list, fields, field_name, headers, timeout):
             st.session_state.log_lines.append("POST IN: string OK (after 429 retry)")
             log_box_sidebar.text("\n".join(st.session_state.log_lines))
             return r2.json()
-        # 再送もダメなら詳細を出して例外
         st.session_state.log_lines.append(f"POST IN: string retry failed {r2.status_code}: {r2.text}")
         log_box_sidebar.text("\n".join(st.session_state.log_lines))
         r2.raise_for_status()
 
-    # 2xxでも429でもない → ログに残して例外
+    # その他の非2xx → 失敗ログ → 例外
     st.session_state.log_lines.append(f"POST IN: string failed {r.status_code}: {r.text}")
     log_box_sidebar.text("\n".join(st.session_state.log_lines))
-    r.raise_for_status()  # ここで例外
-    return r.json()       # 到達しないが型整合のため
+    r.raise_for_status()
+    return r.json()  # 到達しないが型整合のため
+
+
+# def _post_basic_in_string(values_list, fields, field_name, headers, timeout):
+#     """VALUE をカンマ区切り文字列で送る（DWPI 用）"""
+#     values_join = ",".join(values_list)
+#     payload = {
+#         "QUERY": [{"ALG": "BASIC", "FIELD": field_name, "OP": "IN", "VALUE": values_join}],
+#         "LIMIT": len(values_list),
+#         "FIELDS": fields,
+#     }
+#     r = requests.post(api_url, headers=headers, json=payload, timeout=timeout)
+#     if 200 <= r.status_code < 300:
+#         st.session_state.log_lines.append("POST IN: string OK") 
+#         log_box_sidebar.text("\n".join(st.session_state.log_lines))
+#     r.raise_for_status()
+#     return r.json()
+
+#     # 429（レート制限）のときは Retry-After を1回だけ尊重して再送
+#     if r.status_code == 429:
+#         try:
+#             retry_after = int(r.headers.get("Retry-After", "3"))
+#         except Exception:
+#             retry_after = 3
+#         retry_after = max(1, min(30, retry_after))
+#         st.session_state.log_lines.append(f"POST IN: string got 429; retrying after {retry_after}s")
+#         log_box_sidebar.text("\n".join(st.session_state.log_lines))
+#         time.sleep(retry_after)
+#         r2 = requests.post(api_url, headers=headers, json=payload, timeout=timeout)
+#         if 200 <= r2.status_code < 300:
+#             st.session_state.log_lines.append("POST IN: string OK (after 429 retry)")
+#             log_box_sidebar.text("\n".join(st.session_state.log_lines))
+#             return r2.json()
+#         # 再送もダメなら詳細を出して例外
+#         st.session_state.log_lines.append(f"POST IN: string retry failed {r2.status_code}: {r2.text}")
+#         log_box_sidebar.text("\n".join(st.session_state.log_lines))
+#         r2.raise_for_status()
+
+#     # 2xxでも429でもない → ログに残して例外
+#     st.session_state.log_lines.append(f"POST IN: string failed {r.status_code}: {r.text}")
+#     log_box_sidebar.text("\n".join(st.session_state.log_lines))
+#     r.raise_for_status()  # ここで例外
+#     return r.json()       # 到達しないが型整合のため
 
 
 def fetch_fields_for_numbers(id_list, fields_list, chunk_size=14, field_name="PUBLICATION_NUMBER", headers=None, timeout=(10, 90)):
@@ -326,6 +409,9 @@ def write_rows_to_csv_string(rows, key_field="PUBLICATION_NUMBER", field_order=N
 
 # ---------------- Run (取得実行) ----------------
 if run:
+    # 未取得ID（全チャンク合算）を保持
+    not_retrieved_all = []
+
     # 取得用フィールドの確定（DWPI時は PUBLICATION_NUMBER を除外）
     if field_name == "DWPI_ACCESSION_NUMBER":
         effective_fields = [f for f in selected_fields if f != "PUBLICATION_NUMBER"]
@@ -442,6 +528,8 @@ if run:
                 f"Warning: {len(ids_to_fetch)} items not retrieved after {MAX_RETRIES} attempts (chunk {idx})."
             )
             log_box_sidebar.text("\n".join(st.session_state.log_lines))
+            # ← ここで未取得IDを回収
+            not_retrieved_all.extend(ids_to_fetch)
 
         prog.progress(idx / total_chunks, text=f"Chunk {idx}/{total_chunks} 完了")
 
@@ -465,6 +553,36 @@ if run:
         st.session_state.ts = None
         status_main.write("レコードが返りませんでした。")
         st.warning("レコードが返りませんでした。")
+        
+
+    # --- 未取得IDのCSVダウンロード（任意） ---
+    if not_retrieved_all:
+        # 重複を除去し安定順に
+        missing_unique = list(dict.fromkeys([str(v).strip() for v in not_retrieved_all if str(v).strip()]))
+        # 先頭行: ヘッダ名は検索キー（見た目を揃えるため、短い別名も付けるならここで）
+        header = "ID"
+        # BOM + ヘッダ + 本文
+        miss_csv = "\ufeff" + header + "\n" + "\n".join(missing_unique)
+        # ダウンロードボタン（ファイル名はタイムスタンプ込み）
+        miss_ts = st.session_state.ts or datetime.now().strftime("%Y%m%d_%H%M%S")
+        st.download_button(
+            label=f"未取得IDをCSVでダウンロード（{len(missing_unique)}件）",
+            data=miss_csv,
+            file_name=f"{miss_ts}_missing_ids.csv",
+            mime="text/csv",
+            key="download_missing_ids",
+        )
+        # ログにもサマリ
+        st.session_state.log_lines.append(f"Missing IDs total: {len(missing_unique)} (saved as CSV button)")
+        log_box_sidebar.text("\n".join(st.session_state.log_lines))
+        # セッションにも保持（再描画で使いたい場合）
+        st.session_state.missing_ids_csv = miss_csv
+        st.session_state.missing_ids_list = missing_unique
+    else:
+        # 前回の未取得が残っていると誤解を招くのでクリア
+        st.session_state.missing_ids_csv = None
+        st.session_state.missing_ids_list = []
+
 
 # ---------------- Persistent display (常時表示) ----------------
 # ダウンロードクリックで rerun されても、session_state に保存した結果で再描画
