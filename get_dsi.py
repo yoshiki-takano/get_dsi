@@ -160,8 +160,37 @@ def _post_basic_in_array(values_list, fields, field_name, headers, timeout):
         "FIELDS": fields,
     }
     r = requests.post(api_url, headers=headers, json=payload, timeout=timeout)
+    if 200 <= r.status_code < 300:
+        st.session_state.log_lines.append("POST IN: array OK") 
+        log_box_sidebar.text("\n".join(st.session_state.log_lines))
     r.raise_for_status()
     return r.json()
+
+    # 429（レート制限）のときは Retry-After を1回だけ尊重して再送
+    if r.status_code == 429:
+        try:
+            retry_after = int(r.headers.get("Retry-After", "3"))
+        except Exception:
+            retry_after = 3
+        retry_after = max(1, min(30, retry_after))
+        st.session_state.log_lines.append(f"POST IN: array got 429; retrying after {retry_after}s")
+        log_box_sidebar.text("\n".join(st.session_state.log_lines))
+        time.sleep(retry_after)
+        r2 = requests.post(api_url, headers=headers, json=payload, timeout=timeout)
+        if 200 <= r2.status_code < 300:
+            st.session_state.log_lines.append("POST IN: array OK (after 429 retry)")
+            log_box_sidebar.text("\n".join(st.session_state.log_lines))
+            return r2.json()
+        # 再送もダメなら詳細を出して例外
+        st.session_state.log_lines.append(f"POST IN: array retry failed {r2.status_code}: {r2.text}")
+        log_box_sidebar.text("\n".join(st.session_state.log_lines))
+        r2.raise_for_status()
+
+    # 2xxでも429でもない → ログに残して例外
+    st.session_state.log_lines.append(f"POST IN: array failed {r.status_code}: {r.text}")
+    log_box_sidebar.text("\n".join(st.session_state.log_lines))
+    r.raise_for_status()  # ここで例外
+    return r.json()       # 到達しないが型整合のため
 
 
 
@@ -174,8 +203,38 @@ def _post_basic_in_string(values_list, fields, field_name, headers, timeout):
         "FIELDS": fields,
     }
     r = requests.post(api_url, headers=headers, json=payload, timeout=timeout)
+    if 200 <= r.status_code < 300:
+        st.session_state.log_lines.append("POST IN: string OK") 
+        log_box_sidebar.text("\n".join(st.session_state.log_lines))
     r.raise_for_status()
     return r.json()
+
+    # 429（レート制限）のときは Retry-After を1回だけ尊重して再送
+    if r.status_code == 429:
+        try:
+            retry_after = int(r.headers.get("Retry-After", "3"))
+        except Exception:
+            retry_after = 3
+        retry_after = max(1, min(30, retry_after))
+        st.session_state.log_lines.append(f"POST IN: string got 429; retrying after {retry_after}s")
+        log_box_sidebar.text("\n".join(st.session_state.log_lines))
+        time.sleep(retry_after)
+        r2 = requests.post(api_url, headers=headers, json=payload, timeout=timeout)
+        if 200 <= r2.status_code < 300:
+            st.session_state.log_lines.append("POST IN: string OK (after 429 retry)")
+            log_box_sidebar.text("\n".join(st.session_state.log_lines))
+            return r2.json()
+        # 再送もダメなら詳細を出して例外
+        st.session_state.log_lines.append(f"POST IN: string retry failed {r2.status_code}: {r2.text}")
+        log_box_sidebar.text("\n".join(st.session_state.log_lines))
+        r2.raise_for_status()
+
+    # 2xxでも429でもない → ログに残して例外
+    st.session_state.log_lines.append(f"POST IN: string failed {r.status_code}: {r.text}")
+    log_box_sidebar.text("\n".join(st.session_state.log_lines))
+    r.raise_for_status()  # ここで例外
+    return r.json()       # 到達しないが型整合のため
+
 
 def fetch_fields_for_numbers(id_list, fields_list, chunk_size=14, field_name="PUBLICATION_NUMBER", headers=None, timeout=(10, 90)):
     """
