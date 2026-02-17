@@ -553,6 +553,44 @@ if run:
         st.session_state.ts = None
         status_main.write("レコードが返りませんでした。")
         st.warning("レコードが返りませんでした。")
+
+     
+    # 入力行を完全再現：重複も同じ回数、未取得はプレースホルダ行
+    # 1) 取得済みレコードを key -> record にマップ（同一キー複数ある場合は最初を採用）
+    rec_map = {}
+    for rec in rows:
+        k = str(rec.get(field_name, "")).strip()
+        if k and k not in rec_map:
+            rec_map[k] = rec
+
+    # 2) 入力行順に再構築（未取得はプレースホルダ）
+    placeholder_status_col = "_STATUS"  # 任意の列名
+    reconstructed = []
+    for raw in input_ids:  # ※ input_ids は _normalize_ids 済みの入力そのもの（重複あり）
+        key = str(raw).strip()
+        if key in rec_map:
+            reconstructed.append(rec_map[key])
+        else:
+            # プレースホルダ行（検索キーのみ入れて他は空、_STATUS で未取得を明示）
+            ph = {field_name: key, placeholder_status_col: "NOT_FOUND"}
+            reconstructed.append(ph)
+
+    # 3) 出力（表もCSVもこの reconstructed を使う）
+    df = pd.DataFrame(reconstructed)
+
+    # 見栄え調整：検索キー→_STATUS→他の列の順で並べる
+    first_cols = [c for c in [field_name, placeholder_status_col] if c in df.columns]
+    other_cols = [c for c in df.columns if c not in first_cols]
+    df = df[first_cols + other_cols]
+
+    st.session_state.rows = reconstructed
+    st.session_state.df = df
+    st.session_state.ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    st.session_state.csv_str = write_rows_to_csv_string(
+        reconstructed,
+        key_field=field_name,
+        field_order=effective_fields  # _STATUS は write_rows_to_csv_string 内で自動的に末尾に入ります（なければ）
+    )
         
 
     # --- 未取得IDのCSVダウンロード（任意） ---
