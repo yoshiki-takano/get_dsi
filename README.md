@@ -1,6 +1,6 @@
 # Derwent Strength Index (DSI) Fetcher
 
-A Streamlit web application for fetching Derwent Strength Index data from the Clarivate Patents Search API using publication numbers.
+A Streamlit web application for fetching Derwent Strength Index data from the Clarivate Patents Search API using publication numbers or DWPI accession numbers.
 
 ## Overview
 
@@ -22,25 +22,35 @@ This tool allows users to:
 
 ## Requirements
 
-- Python 3.7+
-- Streamlit
-- pandas
+- Python 3.8+ (3.10 recommended)
+- Streamlit (see `requirements.txt`)
+- pandas (>=2.0)
 - requests
+
+Note: `pandas>=2.0` requires Python 3.8 or newer; ensure your environment matches the versions in `requirements.txt`.
 
 ## Installation
 
 1. Clone this repository
-2. Install dependencies:
+
+2. (Optional) Create and activate a virtual environment, then install dependencies:
    ```bash
+   python -m venv .venv
+   # Windows
+   .venv\Scripts\activate
+   # macOS / Linux
+   source .venv/bin/activate
    pip install -r requirements.txt
    ```
 
 3. Set up your Clarivate API key:
-   - **For Streamlit Cloud**: Add `IP_DATA_API` to your secrets
-   - **For Local Development**: Set the environment variable:
-     ```bash
-     set IP_DATA_API=your_api_key  # Windows
-     export IP_DATA_API=your_api_key  # Linux/Mac
+   - **For Streamlit Cloud**: Add `IP_DATA_API` in the app's Secrets (do not commit API keys to the repository). You can also set a local secrets file for development in `.streamlit/secrets.toml`:
+     ```toml
+     IP_DATA_API = "your_api_key"
+     ```
+   - **For Local Development**: Set the environment variable (Windows example):
+     ```powershell
+     setx IP_DATA_API "your_api_key"
      ```
 
 ## Usage
@@ -50,17 +60,17 @@ Run the application:
 streamlit run get_dsi.py
 ```
 
-The app will open in your browser (typically at `http://localhost:8501`)
+The app will open in your browser (typically at `http://localhost:8501`). If you use a custom port, add `--server.port <port>`.
 
 ### Input
 
 1. **Option A: File Upload**
-   - Upload a text file with one publication number per line
+   - Upload a text file with one identifier per line (Publication number or DWPI accession number)
    - Lines starting with `#` are treated as comments and ignored
 
 2. **Option B: Text Input**
-   - Paste publication numbers directly in the text area
-   - One publication number per line
+   - Paste identifiers directly in the text area
+   - One identifier per line
 
 ### Configuration
 
@@ -124,4 +134,10 @@ The web UI is in Japanese (日本語).
 
 ---
 
-**Note**: Publication number search is currently the only supported search method. Other search methods may be added in future versions.
+## Notes & Caveats
+
+- The app supports both `Publication number` and `DWPI accession number` search modes — select the appropriate key in the UI.
+- Clarivate API may enforce rate limits; for large batches check your API plan and consider reducing `ID_CHUNK` or adding delays.
+- Do not commit API keys or `.streamlit/secrets.toml` to the repository.
+
+
